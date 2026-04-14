@@ -1,6 +1,15 @@
 require('dotenv').config();
 const axios = require('axios');
 
+// Validate required environment variables on startup
+const requiredEnvVars = ['ZENDESK_SUBDOMAIN', 'ZENDESK_EMAIL', 'ZENDESK_API_TOKEN', 'NOREPLY_EMAILS'];
+const missingVars = requiredEnvVars.filter(v => !process.env[v]);
+if (missingVars.length > 0) {
+  console.error('❌ FATAL: Missing required environment variables:');
+  missingVars.forEach(v => console.error(`   - ${v}: [MISSING]`));
+  process.exit(1);
+}
+
 // Zendesk API configuration
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN;
 const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
@@ -17,6 +26,16 @@ const zendeskApi = axios.create({
   }
 });
 
+// Validate email format
+function isValidEmail(email) {
+  return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(email);
+}
+
+// Sleep helper for rate limiting
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /**
  * Search for a user by email address
  */
@@ -25,9 +44,9 @@ async function searchUserByEmail(email) {
     const response = await zendeskApi.get('/users/search.json', {
       params: { query: email }
     });
-    
+
     if (response.data.users && response.data.users.length > 0) {
-      return response.data.users[0]; // Return first matching user
+      return response.data.users[0];
     }
     return null;
   } catch (error) {
@@ -58,17 +77,22 @@ async function unsuspendUser(userId) {
  */
 async function checkAndUnsuspendUser(email) {
   console.log(`\nChecking user: ${email}`);
-  
+
+  if (!isValidEmail(email)) {
+    console.warn(`⚠ Skipping invalid email address: ${email}`);
+    return { email, status: 'invalid_email' };
+  }
+
   try {
     const user = await searchUserByEmail(email);
-    
+
     if (!user) {
       console.log(`❌ User not found: ${email}`);
       return { email, status: 'not_found' };
     }
-    
+
     console.log(`✓ Found user: ${user.name} (ID: ${user.id})`);
-    
+
     if (user.suspended) {
       console.log(`⚠ User is suspended. Unsuspending...`);
       await unsuspendUser(user.id);
@@ -85,38 +109,43 @@ async function checkAndUnsuspendUser(email) {
 }
 
 /**
- * Process multiple email addresses
+ * Process multiple email addresses with rate limiting
  */
 async function processEmails(emails) {
   console.log(`\n📧 Processing ${emails.length} email address(es)...\n`);
-  
+
   const results = [];
   for (const email of emails) {
     const result = await checkAndUnsuspendUser(email.trim());
     results.push(result);
+    if (emails.length > 1) await sleep(500); // 500ms delay between requests
   }
-  
+
   console.log('\n📊 Summary:');
   console.log(`Total processed: ${results.length}`);
   console.log(`Unsuspended: ${results.filter(r => r.status === 'unsuspended').length}`);
   console.log(`Already active: ${results.filter(r => r.status === 'already_active').length}`);
   console.log(`Not found: ${results.filter(r => r.status === 'not_found').length}`);
+  console.log(`Invalid email: ${results.filter(r => r.status === 'invalid_email').length}`);
   console.log(`Errors: ${results.filter(r => r.status === 'error').length}`);
-  
+
   return results;
 }
 
 // Main execution
 (async () => {
-  // List of noreply addresses to check (from environment variable or hardcoded)
-  const emailsToCheck = process.env.NOREPLY_EMAILS 
-    ? process.env.NOREPLY_EMAILS.split(',')
-    : [
-        'noreply@example.com',
-        'no-reply@example.com',
-        'notifications@example.com'
-      ];
-  
+  const emailsToCheck = process.env.NOREPLY_EMAILS
+    .split(',')
+    .map(e => e.trim())
+    .filter(e => e.length > 0);
+
+  if (emailsToCheck.length === 0) {
+    console.error('❌ FATAL: NOREPLY_EMAILS is set but contains no valid entries.');
+    process.exit(1);
+  }
+
+  console.log(`📋 Emails to process: ${emailsToCheck.join(', ')}`);
+
   try {
     await processEmails(emailsToCheck);
   } catch (error) {
