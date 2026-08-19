@@ -12,13 +12,13 @@ Automatically checks and unsuspends Zendesk users by email address. Perfect for 
 
 ## Setup
 
-### 1. Get Zendesk API Credentials
+### 1. Get Zendesk OAuth Credentials
 
 1. Log into your Zendesk account as an admin
-2. Go to Admin Center → Apps and integrations → APIs → Zendesk API
-3. Enable Token Access
-4. Click "Add API token"
-5. Copy the token (you won't see it again!)
+2. Go to Admin Center → Apps and integrations → APIs → OAuth Clients
+3. Add a new **confidential** OAuth client
+4. Grant it the `users:read` and `users:write` scopes (that's all this service calls)
+5. Copy the Unique Identifier (client ID) and Secret (you won't see the secret again!)
 
 ### 2. Local Development
 
@@ -31,8 +31,8 @@ cp .env.example .env
 
 # Edit .env with your credentials
 # ZENDESK_SUBDOMAIN=your-company (from your-company.zendesk.com)
-# ZENDESK_EMAIL=admin@yourcompany.com
-# ZENDESK_API_TOKEN=your-token-here
+# ZENDESK_OAUTH_CLIENT_ID=your-client-id
+# ZENDESK_OAUTH_CLIENT_SECRET=your-client-secret
 # NOREPLY_EMAILS=noreply@example.com,no-reply@example.com
 
 # Run the script
@@ -50,8 +50,8 @@ npm start
    - In Railway project settings, go to "Variables"
    - Add all variables from `.env.example`:
      - `ZENDESK_SUBDOMAIN`
-     - `ZENDESK_EMAIL`
-     - `ZENDESK_API_TOKEN`
+     - `ZENDESK_OAUTH_CLIENT_ID`
+     - `ZENDESK_OAUTH_CLIENT_SECRET`
      - `NOREPLY_EMAILS`
 
 3. **Configure the service**
@@ -126,8 +126,9 @@ With Railway Cron or any cron service:
 
 ### "Authentication failed"
 - Verify your Zendesk subdomain
-- Check your API token is correct
-- Ensure the API user has admin permissions
+- Check your OAuth client ID/secret are correct and the client is confidential
+- Ensure the OAuth client's scopes include `users:read` and `users:write`
+- The client_credentials token is attributed to whichever Zendesk user created the OAuth client — confirm that account has the necessary permissions
 
 ### "Rate limit exceeded"
 - Zendesk API has rate limits
@@ -137,9 +138,9 @@ With Railway Cron or any cron service:
 ## Security Notes
 
 - Never commit your `.env` file
-- Keep your API token secure
+- Keep your OAuth client secret secure
 - Use Railway's encrypted environment variables
-- Regularly rotate API tokens
+- Scope the OAuth client to only `users:read`/`users:write` — least privilege for what this service does
 
 ## License
 

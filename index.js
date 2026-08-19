@@ -2,7 +2,7 @@ require('dotenv').config();
 const axios = require('axios');
 
 // Validate required environment variables on startup
-const requiredEnvVars = ['ZENDESK_SUBDOMAIN', 'ZENDESK_EMAIL', 'ZENDESK_API_TOKEN', 'NOREPLY_EMAILS'];
+const requiredEnvVars = ['ZENDESK_SUBDOMAIN', 'ZENDESK_OAUTH_CLIENT_ID', 'ZENDESK_OAUTH_CLIENT_SECRET', 'NOREPLY_EMAILS'];
 const missingVars = requiredEnvVars.filter(v => !process.env[v]);
 if (missingVars.length > 0) {
   console.error('❌ FATAL: Missing required environment variables:');
@@ -12,19 +12,45 @@ if (missingVars.length > 0) {
 
 // Zendesk API configuration
 const ZENDESK_SUBDOMAIN = process.env.ZENDESK_SUBDOMAIN;
-const ZENDESK_EMAIL = process.env.ZENDESK_EMAIL;
-const ZENDESK_API_TOKEN = process.env.ZENDESK_API_TOKEN;
+const OAUTH_CLIENT_ID = process.env.ZENDESK_OAUTH_CLIENT_ID;
+const OAUTH_CLIENT_SECRET = process.env.ZENDESK_OAUTH_CLIENT_SECRET;
+const ZENDESK_DOMAIN = `https://${ZENDESK_SUBDOMAIN}.zendesk.com`;
 
 const zendeskApi = axios.create({
-  baseURL: `https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2`,
-  auth: {
-    username: `${ZENDESK_EMAIL}/token`,
-    password: ZENDESK_API_TOKEN
-  },
+  baseURL: `${ZENDESK_DOMAIN}/api/v2`,
   headers: {
     'Content-Type': 'application/json'
   }
 });
+
+// Fetch an OAuth access token via the client_credentials grant.
+// This is a one-shot script, so we just get a token once per run rather
+// than maintaining a cache/refresh cycle.
+async function fetchAccessToken() {
+  const response = await axios.post(`${ZENDESK_DOMAIN}/oauth/tokens`, {
+    grant_type: 'client_credentials',
+    client_id: OAUTH_CLIENT_ID,
+    client_secret: OAUTH_CLIENT_SECRET,
+    scope: 'users:read users:write'
+  });
+  return response.data.access_token;
+}
+
+// Retry once with a fresh token if it's rejected mid-run (e.g. expired on a long list).
+zendeskApi.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const config = error.config;
+    if (error.response && error.response.status === 401 && config && !config._retriedOAuth) {
+      config._retriedOAuth = true;
+      const token = await fetchAccessToken();
+      zendeskApi.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      config.headers['Authorization'] = `Bearer ${token}`;
+      return zendeskApi(config);
+    }
+    return Promise.reject(error);
+  }
+);
 
 // Validate email format
 function isValidEmail(email) {
@@ -147,6 +173,9 @@ async function processEmails(emails) {
   console.log(`📋 Emails to process: ${emailsToCheck.join(', ')}`);
 
   try {
+    const token = await fetchAccessToken();
+    zendeskApi.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
     await processEmails(emailsToCheck);
   } catch (error) {
     console.error('Fatal error:', error);
